@@ -1,5 +1,6 @@
 {
   "version": 2,
   "buildCommand": "npm run build",
-  "rewrites": [{ "source": "/(.*)", "destination": "/api" }]
+  "builds": [{ "src": "api/index.cjs", "use": "@vercel/node" }],
+  "routes": [{ "src": "/(.*)", "dest": "api/index.cjs" }]
 }

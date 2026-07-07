@@ -4,10 +4,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "tsx watch src/index.ts",
+    "dev": "tsx watch src/dev-server.ts",
     "typecheck": "tsc --noEmit",
     "build": "node esbuild.config.mjs",
-    "start": "tsx src/index.ts",
+    "start": "tsx src/dev-server.ts",
     "db:push": "npx supabase@latest db push",
     "db:push:dry": "npx supabase@latest db push --dry-run",
     "db:migration:new": "npx supabase@latest migration new",

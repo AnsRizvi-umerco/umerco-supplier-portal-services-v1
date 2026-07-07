@@ -22,7 +22,7 @@ src/
 ```bash
 cp .env.example .env
 npm install
-npm run dev            # http://localhost:3001/api/v1
+npm run dev            # http://localhost:3001/api/v1 (uses src/dev-server.ts)
 ```
 
 ## API (v1)
