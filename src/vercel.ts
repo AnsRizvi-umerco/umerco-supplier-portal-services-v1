@@ -1,5 +1,5 @@
 import "dotenv/config";
-import { createApp } from "@/app";
+import { createApp } from "@/create-app";
 import { assertEnv } from "@/config/env";
 
 assertEnv();
