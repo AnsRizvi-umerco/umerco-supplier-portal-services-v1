@@ -2,7 +2,6 @@ import cors from "cors";
 import express from "express";
 import { API_BASE_PATH } from "@/constants/api";
 import { attachAuth } from "@/middleware/auth";
-import { corsOrigin } from "@/middleware/cors";
 import { errorHandler } from "@/middleware/errorHandler";
 import v1Routes from "@/routes/v1/index";
 import webhooksRoutes from "@/routes/v1/webhooks.routes";
@@ -12,7 +11,7 @@ export function createApp() {
 
   app.use(
     cors({
-      origin: corsOrigin,
+      origin: true,
       credentials: true,
       methods: ["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
       allowedHeaders: ["Content-Type", "Authorization"]
