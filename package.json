@@ -4,11 +4,11 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "tsx watch src/dev-server.ts",
+    "dev": "tsx watch src/index.ts",
     "typecheck": "tsc --noEmit",
     "build": "node esbuild.config.mjs",
     "vercel-build": "npm run build",
-    "start": "tsx src/dev-server.ts",
+    "start": "tsx src/index.ts",
     "db:push": "npx supabase@latest db push",
     "db:push:dry": "npx supabase@latest db push --dry-run",
     "db:migration:new": "npx supabase@latest migration new",

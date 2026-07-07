@@ -64,12 +64,13 @@ npm run db:push
 
 Legacy `NEXT_PUBLIC_SUPABASE_*` names are still accepted as fallbacks.
 
-## Deploy (Vercel)
+## Deploy (Vercel — legacy builds/routes)
 
 1. Connect the [WebForms-Backend](https://github.com/AnsRizvi-umerco/WebForms-Backend) repo to Vercel.
-2. **Framework Preset:** Other (not Next.js).
-3. **Build Command:** `npm run build` (bundles to `app.cjs` for zero-config Express).
-4. Set all variables from `.env.example` in Vercel project settings.
-5. Set `CORS_ORIGIN` to your frontend URL (e.g. `https://your-ui.vercel.app,http://localhost:5173`).
+2. **Framework Preset:** Other.
+3. **Build Command:** `npm run build` (bundles to `api/index.cjs`).
+4. `vercel.json` uses legacy `builds` + `routes` — all traffic goes to the bundled handler, not raw `src/app.ts`.
+5. Set all variables from `.env.example` in Vercel project settings.
+6. Set `CORS_ORIGIN` to your frontend URL (e.g. `https://your-ui.vercel.app,http://localhost:5173`).
 
 Health check: `GET /health` → `{ "ok": true, "version": "v1" }`

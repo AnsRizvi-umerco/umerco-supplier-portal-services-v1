@@ -10,7 +10,7 @@ await esbuild.build({
   platform: "node",
   target: "node20",
   format: "cjs",
-  outfile: "app.cjs",
+  outfile: "api/index.cjs",
   packages: "external",
   alias: {
     "@": path.resolve(__dirname, "src")
