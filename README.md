@@ -67,8 +67,9 @@ Legacy `NEXT_PUBLIC_SUPABASE_*` names are still accepted as fallbacks.
 ## Deploy (Vercel)
 
 1. Connect the [WebForms-Backend](https://github.com/AnsRizvi-umerco/WebForms-Backend) repo to Vercel.
-2. Set all variables from `.env.example` in the Vercel project settings.
-3. Set `CORS_ORIGIN` to your frontend URL (e.g. `https://your-ui.vercel.app`).
-4. Deploy — `npm run build` bundles the app with esbuild (resolves `@/` path aliases for serverless).
+2. **Framework Preset:** Other (not Next.js).
+3. **Build Command:** `npm run build` (bundles to `app.cjs` for zero-config Express).
+4. Set all variables from `.env.example` in Vercel project settings.
+5. Set `CORS_ORIGIN` to your frontend URL (e.g. `https://your-ui.vercel.app,http://localhost:5173`).
 
 Health check: `GET /health` → `{ "ok": true, "version": "v1" }`

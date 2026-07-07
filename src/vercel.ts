@@ -4,4 +4,4 @@ import { assertEnv } from "@/config/env";
 
 assertEnv();
 
-export default createApp();
+export = createApp();
