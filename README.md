@@ -63,3 +63,12 @@ npm run db:push
 | `IWHI_*` | Integration settings |
 
 Legacy `NEXT_PUBLIC_SUPABASE_*` names are still accepted as fallbacks.
+
+## Deploy (Vercel)
+
+1. Connect the [WebForms-Backend](https://github.com/AnsRizvi-umerco/WebForms-Backend) repo to Vercel.
+2. Set all variables from `.env.example` in the Vercel project settings.
+3. Set `CORS_ORIGIN` to your frontend URL (e.g. `https://your-ui.vercel.app`).
+4. Deploy — `npm run build` bundles the app with esbuild (resolves `@/` path aliases for serverless).
+
+Health check: `GET /health` → `{ "ok": true, "version": "v1" }`
