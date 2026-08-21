@@ -56,13 +56,11 @@ npm run db:push
 
 | Variable | Purpose |
 |----------|---------|
-| `SUPABASE_URL` | Supabase project URL |
-| `SUPABASE_ANON_KEY` | Supabase anon key |
-| `SUPABASE_SERVICE_ROLE_KEY` | Service role key |
+| `MASTER_DATABASE_URL` | Master Portal PostgreSQL URL (auth user lookups) |
+| `MASTER_PORTAL_BASE_URL` | Master Portal API base (db-route for shared/dedicated connection strings) |
+| `JWT_SECRET` | Must match Master Portal JWT signing secret |
 | `CORS_ORIGIN` | Allowed UI origins (comma-separated) |
 | `IWHI_*` | Integration settings |
-
-Legacy `NEXT_PUBLIC_SUPABASE_*` names are still accepted as fallbacks.
 
 ## Deploy (Vercel — legacy builds/routes)
 

@@ -1,25 +1,30 @@
-import { supabaseAdmin } from "@/integrations/supabase/admin";
+import { getOperationsPool } from "@/config/operations-db";
+import { ensureScheduleStatusConstraint } from "@/config/operations-schema";
 import type { SubmitMessage } from "@/schemas";
 
 export async function createSubmission(params: {
   supplierId: string;
+  companyId: string;
   message: SubmitMessage;
   refNo: string;
   deljitRef?: string;
 }) {
-  const { data } = await supabaseAdmin
-    .from("submissions")
-    .insert({
-      supplier_id: params.supplierId,
-      doc_type: params.message.messageType,
-      ref_no: params.refNo,
-      deljit_ref: params.deljitRef ?? null,
-      status: "pending",
-      canonical_json: params.message
-    })
-    .select("id")
-    .single();
-  return data;
+  const { rows } = await getOperationsPool().query<{ id: string }>(
+    `INSERT INTO submissions (
+       supplier_id, company_id, doc_type, ref_no, deljit_ref, status, canonical_json
+     )
+     VALUES ($1, $2, $3, $4, $5, 'pending', $6)
+     RETURNING id`,
+    [
+      params.supplierId,
+      params.companyId,
+      params.message.messageType,
+      params.refNo,
+      params.deljitRef ?? null,
+      params.message
+    ]
+  );
+  return rows[0] ?? null;
 }
 
 export async function finalizeSubmission(params: {
@@ -30,16 +35,59 @@ export async function finalizeSubmission(params: {
   iwhiTransactionId?: string;
 }) {
   if (!params.submissionId) return;
-  await supabaseAdmin
-    .from("submissions")
-    .update({
-      status: params.ok ? "submitted" : "error",
-      iwhi_response: params.response ?? null,
-      error_message: params.ok ? null : (params.error ?? "IWHI request failed"),
-      iwhi_transaction_id: params.iwhiTransactionId ?? null,
-      submitted_at: params.ok ? new Date().toISOString() : null
-    })
-    .eq("id", params.submissionId);
+
+  await getOperationsPool().query(
+    `UPDATE submissions
+     SET status = $2,
+         iwhi_response = $3,
+         error_message = $4,
+         iwhi_transaction_id = $5,
+         submitted_at = $6
+     WHERE id = $1`,
+    [
+      params.submissionId,
+      params.ok ? "submitted" : "error",
+      params.response ?? null,
+      params.ok ? null : (params.error ?? "IWHI request failed"),
+      params.iwhiTransactionId ?? null,
+      params.ok ? new Date().toISOString() : null
+    ]
+  );
+}
+
+export async function markScheduleInvoiceSent(params: {
+  supplierId: string;
+  companyId: string;
+  poReference: string;
+}): Promise<Array<{ id: string; supplier_id: string; company_id: string | null }>> {
+  const poReference = params.poReference.trim();
+  if (!poReference) return [];
+
+  try {
+    const pool = getOperationsPool();
+    await ensureScheduleStatusConstraint(pool);
+
+    const { rows } = await pool.query<{
+      id: string;
+      supplier_id: string;
+      company_id: string | null;
+    }>(
+      `UPDATE delivery_schedules
+       SET status = 'invoice_sent'
+       WHERE deljit_ref = $1
+         AND (
+           supplier_id = $2
+           OR company_id = $3
+         )
+       RETURNING id, supplier_id, company_id`,
+      [poReference, params.supplierId, params.companyId]
+    );
+
+    return rows;
+  } catch (error) {
+    console.error("Failed to mark schedule invoice sent:", error);
+    return [];
+  }
 }
 
 export async function writeSubmissionAudit(params: {
@@ -49,14 +97,17 @@ export async function writeSubmissionAudit(params: {
   request: unknown;
   response: unknown;
 }) {
-  await supabaseAdmin.from("audit_log").insert({
-    supplier_id: params.supplierId,
-    action: "submission_sent",
-    doc_ref: params.docRef,
-    doc_type: params.docType,
-    details: {
-      request: params.request,
-      response: params.response
-    }
-  });
+  await getOperationsPool().query(
+    `INSERT INTO audit_log (supplier_id, action, doc_ref, doc_type, details)
+     VALUES ($1, 'submission_sent', $2, $3, $4)`,
+    [
+      params.supplierId,
+      params.docRef,
+      params.docType,
+      {
+        request: params.request,
+        response: params.response
+      }
+    ]
+  );
 }

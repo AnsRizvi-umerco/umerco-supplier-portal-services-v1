@@ -1,5 +1,5 @@
 import { statusCallbackSchema } from "@/schemas";
-import { supabaseAdmin } from "@/integrations/supabase/admin";
+import { getOperationsPool } from "@/config/operations-db";
 
 export async function handleStatusCallback(body: unknown) {
   const parsed = statusCallbackSchema.safeParse(body);
@@ -8,35 +8,52 @@ export async function handleStatusCallback(body: unknown) {
   }
 
   const callback = parsed.data;
-  const update = {
-    status: callback.status,
-    iwhi_response: callback,
-    error_message: callback.status === "error" ? (callback.errorDetail ?? "IWHI submission failed") : null,
-    iwhi_message_id: callback.messageId ?? null,
-    last_callback_at: new Date().toISOString()
-  };
+  const pool = getOperationsPool();
+  const updateValues = [
+    callback.status,
+    callback,
+    callback.status === "error" ? (callback.errorDetail ?? "IWHI submission failed") : null,
+    callback.messageId ?? null,
+    new Date().toISOString()
+  ];
 
-  const primary = await supabaseAdmin.from("submissions").update(update).eq("id", callback.transactionId).select("id, supplier_id").single();
+  let submission: { id: string; supplier_id: string } | undefined;
 
-  let submission = primary.data;
+  const primary = await pool.query<{ id: string; supplier_id: string }>(
+    `UPDATE submissions
+     SET status = $2,
+         iwhi_response = $3,
+         error_message = $4,
+         iwhi_message_id = $5,
+         last_callback_at = $6
+     WHERE id = $1
+     RETURNING id, supplier_id`,
+    [callback.transactionId, ...updateValues]
+  );
+
+  submission = primary.rows[0];
+
   if (!submission) {
-    const fallback = await supabaseAdmin
-      .from("submissions")
-      .update(update)
-      .eq("iwhi_transaction_id", callback.transactionId)
-      .select("id, supplier_id")
-      .single();
-    submission = fallback.data;
+    const fallback = await pool.query<{ id: string; supplier_id: string }>(
+      `UPDATE submissions
+       SET status = $2,
+           iwhi_response = $3,
+           error_message = $4,
+           iwhi_message_id = $5,
+           last_callback_at = $6
+       WHERE iwhi_transaction_id = $1
+       RETURNING id, supplier_id`,
+      [callback.transactionId, ...updateValues]
+    );
+    submission = fallback.rows[0];
   }
 
   if (submission) {
-    await supabaseAdmin.from("audit_log").insert({
-      supplier_id: submission.supplier_id,
-      action: "status_callback_received",
-      doc_ref: submission.id,
-      doc_type: null,
-      details: callback
-    });
+    await pool.query(
+      `INSERT INTO audit_log (supplier_id, action, doc_ref, doc_type, details)
+       VALUES ($1, 'status_callback_received', $2, NULL, $3)`,
+      [submission.supplier_id, submission.id, callback]
+    );
   }
 
   return { ok: true, status: 200 };

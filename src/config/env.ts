@@ -1,17 +1,11 @@
-const required = ["SUPABASE_URL", "SUPABASE_ANON_KEY", "SUPABASE_SERVICE_ROLE_KEY"] as const;
+const required = ["MASTER_DATABASE_URL"] as const;
 
-function readEnv(key: (typeof required)[number]): string | undefined {
-  if (key === "SUPABASE_URL") {
-    return process.env.SUPABASE_URL?.trim() || process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
-  }
-  if (key === "SUPABASE_ANON_KEY") {
-    return process.env.SUPABASE_ANON_KEY?.trim() || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim();
-  }
-  return process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
+export function getOptionalEnv(key: string): string | undefined {
+  return process.env[key]?.trim() || undefined;
 }
 
-export function getEnv(key: (typeof required)[number]): string {
-  const value = readEnv(key);
+export function getEnv(key: (typeof required)[number] | "OPERATIONS_DATABASE_URL"): string {
+  const value = process.env[key]?.trim();
   if (!value) {
     throw new Error(`Missing required environment variable: ${key}`);
   }
@@ -20,6 +14,6 @@ export function getEnv(key: (typeof required)[number]): string {
 
 export function assertEnv() {
   for (const key of required) {
-    readEnv(key);
+    getEnv(key);
   }
 }

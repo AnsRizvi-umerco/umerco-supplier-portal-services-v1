@@ -38,8 +38,8 @@ export const nonNegativeDecimalStringSchema = decimalStringSchema.refine(
 );
 
 export const envelopeBaseSchema = z.object({
-  supplierCode: z.string().min(1),
-  tradingPartner: tradingPartnerSchema
+  supplierCode: z.string().optional().default(""),
+  tradingPartner: z.string().optional().default("")
 });
 
 export const statusSchema = z.enum(["draft", "pending", "submitted", "error"]);

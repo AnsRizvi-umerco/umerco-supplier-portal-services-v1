@@ -1,6 +1,7 @@
-import type { SupabaseClient } from "@supabase/supabase-js";
-import type { SupplierRow } from "@/middleware/auth";
+import type { PortalAuthUser, SupplierRow } from "@/middleware/auth";
+import { getOperationsPool } from "@/config/operations-db";
 import { resolveDateRangeBounds, toIsoDate } from "@/utils/date-range";
+import { resolveDataScope, scopePredicate, type DataScope } from "@/utils/data-scope";
 
 type SubmissionRow = {
   doc_type: string | null;
@@ -130,97 +131,130 @@ function incrementTrendBucket(
   trendMap.set(key, point);
 }
 
+async function fetchSubmissions(
+  scope: DataScope,
+  from: Date | null,
+  to: Date | null,
+  range: RangeValue
+): Promise<SubmissionRow[]> {
+  const pool = getOperationsPool();
+  const params: unknown[] = [scope.companyId, scope.supplierId];
+  let dateFilter = "";
+
+  if (range !== "all" && from && to) {
+    params.push(from.toISOString(), to.toISOString());
+    dateFilter = " AND created_at >= $3 AND created_at <= $4";
+  }
+
+  const { rows } = await pool.query<SubmissionRow>(
+    `SELECT doc_type, status, created_at, submitted_at,
+            canonical_json->>'tradingPartner' AS trading_partner
+     FROM submissions
+     WHERE ${scopePredicate(1, 2)}${dateFilter}
+     ORDER BY created_at ASC`,
+    params
+  );
+  return rows;
+}
+
+async function fetchSchedules(
+  scope: DataScope,
+  from: Date | null,
+  to: Date | null,
+  range: RangeValue
+): Promise<ScheduleRow[]> {
+  const pool = getOperationsPool();
+  const params: unknown[] = [scope.companyId, scope.supplierId];
+  let dateFilter = "";
+
+  if (range !== "all" && from && to) {
+    params.push(from.toISOString(), to.toISOString());
+    dateFilter = " AND received_at >= $3 AND received_at <= $4";
+  }
+
+  const { rows } = await pool.query<ScheduleRow>(
+    `SELECT received_at
+     FROM delivery_schedules
+     WHERE ${scopePredicate(1, 2)}${dateFilter}
+     ORDER BY received_at ASC`,
+    params
+  );
+  return rows;
+}
+
+async function fetchMtdSubmissions(
+  scope: DataScope,
+  mtdFrom: Date,
+  now: Date
+): Promise<Pick<SubmissionRow, "status" | "created_at">[]> {
+  const { rows } = await getOperationsPool().query<Pick<SubmissionRow, "status" | "created_at">>(
+    `SELECT status, created_at
+     FROM submissions
+     WHERE ${scopePredicate(1, 2)}
+       AND created_at >= $3
+       AND created_at <= $4`,
+    [scope.companyId, scope.supplierId, mtdFrom.toISOString(), now.toISOString()]
+  );
+  return rows;
+}
+
+async function fetchMtdSchedules(
+  scope: DataScope,
+  mtdFrom: Date,
+  now: Date
+): Promise<ScheduleRow[]> {
+  const { rows } = await getOperationsPool().query<ScheduleRow>(
+    `SELECT received_at
+     FROM delivery_schedules
+     WHERE ${scopePredicate(1, 2)}
+       AND received_at >= $3
+       AND received_at <= $4`,
+    [scope.companyId, scope.supplierId, mtdFrom.toISOString(), now.toISOString()]
+  );
+  return rows;
+}
+
 export async function getDashboard(
   supplier: SupplierRow | null | undefined,
-  supabase: SupabaseClient | undefined,
+  portalUser: PortalAuthUser | undefined,
   queryString: string
 ) {
   const { range, groupBy, from, to } = parseRange(new URLSearchParams(queryString));
+  const scope = resolveDataScope(portalUser, supplier);
 
-  if (!supplier || !supabase) {
+  if (!scope) {
     return { status: 200 as const, body: { kpis: EMPTY_KPIS, trend: [], docMix: [] } };
   }
   if (range === "custom" && (!from || !to)) {
     return { status: 200 as const, body: { kpis: EMPTY_KPIS, trend: [], docMix: [] } };
   }
 
-  const submissionSelect =
-    "doc_type,status,created_at,submitted_at,trading_partner:canonical_json->>tradingPartner";
-  const mtdSubmissionSelect = "status, created_at";
-
-  const buildWindowedSubmissionsQuery = () => {
-    let q = supabase
-      .from("submissions")
-      .select(submissionSelect)
-      .eq("supplier_id", supplier.id)
-      .order("created_at", { ascending: true });
-    if (range !== "all" && from && to) {
-      q = q.gte("created_at", from.toISOString()).lte("created_at", to.toISOString());
-    }
-    return q;
-  };
-
-  const buildWindowedSchedulesQuery = () => {
-    let q = supabase
-      .from("delivery_schedules")
-      .select("received_at")
-      .eq("supplier_id", supplier.id)
-      .order("received_at", { ascending: true });
-    if (range !== "all" && from && to) {
-      q = q.gte("received_at", from.toISOString()).lte("received_at", to.toISOString());
-    }
-    return q;
-  };
-
   const now = new Date();
   const mtdFrom = startOfCurrentUtcMonth();
-
-  const mtdSubmissionsQuery = supabase
-    .from("submissions")
-    .select(mtdSubmissionSelect)
-    .eq("supplier_id", supplier.id)
-    .gte("created_at", mtdFrom.toISOString())
-    .lte("created_at", now.toISOString());
-
-  const mtdSchedulesQuery = supabase
-    .from("delivery_schedules")
-    .select("received_at")
-    .eq("supplier_id", supplier.id)
-    .gte("received_at", mtdFrom.toISOString())
-    .lte("received_at", now.toISOString());
 
   let submissionRows: SubmissionRow[] = [];
   let scheduleRows: ScheduleRow[] = [];
   let mtdSubmissionRows: Pick<SubmissionRow, "status" | "created_at">[] = [];
   let mtdScheduleRows: ScheduleRow[] = [];
 
-  if (range === "all") {
-    const [subRes, mtdSubRes, mtdSchedRes] = await Promise.all([
-      buildWindowedSubmissionsQuery(),
-      mtdSubmissionsQuery,
-      mtdSchedulesQuery
-    ]);
-    if (subRes.error) return { status: 400 as const, body: { error: subRes.error.message } };
-    if (mtdSubRes.error) return { status: 400 as const, body: { error: mtdSubRes.error.message } };
-    if (mtdSchedRes.error) return { status: 400 as const, body: { error: mtdSchedRes.error.message } };
-    submissionRows = (subRes.data ?? []) as SubmissionRow[];
-    mtdSubmissionRows = (mtdSubRes.data ?? []) as Pick<SubmissionRow, "status" | "created_at">[];
-    mtdScheduleRows = (mtdSchedRes.data ?? []) as ScheduleRow[];
-  } else {
-    const [subRes, schedRes, mtdSubRes, mtdSchedRes] = await Promise.all([
-      buildWindowedSubmissionsQuery(),
-      buildWindowedSchedulesQuery(),
-      mtdSubmissionsQuery,
-      mtdSchedulesQuery
-    ]);
-    if (subRes.error) return { status: 400 as const, body: { error: subRes.error.message } };
-    if (schedRes.error) return { status: 400 as const, body: { error: schedRes.error.message } };
-    if (mtdSubRes.error) return { status: 400 as const, body: { error: mtdSubRes.error.message } };
-    if (mtdSchedRes.error) return { status: 400 as const, body: { error: mtdSchedRes.error.message } };
-    submissionRows = (subRes.data ?? []) as SubmissionRow[];
-    scheduleRows = (schedRes.data ?? []) as ScheduleRow[];
-    mtdSubmissionRows = (mtdSubRes.data ?? []) as Pick<SubmissionRow, "status" | "created_at">[];
-    mtdScheduleRows = (mtdSchedRes.data ?? []) as ScheduleRow[];
+  try {
+    if (range === "all") {
+      [submissionRows, mtdSubmissionRows, mtdScheduleRows] = await Promise.all([
+        fetchSubmissions(scope, from, to, range),
+        fetchMtdSubmissions(scope, mtdFrom, now),
+        fetchMtdSchedules(scope, mtdFrom, now)
+      ]);
+    } else {
+      [submissionRows, scheduleRows, mtdSubmissionRows, mtdScheduleRows] = await Promise.all([
+        fetchSubmissions(scope, from, to, range),
+        fetchSchedules(scope, from, to, range),
+        fetchMtdSubmissions(scope, mtdFrom, now),
+        fetchMtdSchedules(scope, mtdFrom, now)
+      ]);
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to load dashboard";
+    return { status: 400 as const, body: { error: message } };
   }
 
   const trendMap = new Map<string, TrendPoint>();
@@ -294,7 +328,8 @@ export async function getDashboard(
       kpis: {
         inboundTransactionsMtd,
         outboundTransactionsMtd,
-        activeTradingPartners: tradingPartners.size,
+        activeTradingPartners:
+          portalUser?.actor === "partner_admin" ? tradingPartners.size : 0,
         errorsExceptions,
         avgProcessingTimeMinutes
       },

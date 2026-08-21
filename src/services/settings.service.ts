@@ -1,5 +1,6 @@
-import type { SupabaseClient, User } from "@supabase/supabase-js";
 import { z } from "zod";
+import type { PortalAuthUser } from "@/middleware/auth";
+import { getOperationsPool } from "@/config/operations-db";
 import { TRADING_PARTNERS, getIwhiBaseUrl } from "@/integrations/iwhi/config";
 
 const SETTINGS_SELECT =
@@ -22,36 +23,84 @@ export const settingsPatchSchema = z.object({
 
 const OUTBOUND_TYPES = ["APERAK", "ORDRSP", "DESADV", "INVOIC"] as const;
 
-export async function getSettings(user: User, supabase: SupabaseClient) {
-  const { data, error } = await supabase
-    .from("suppliers")
-    .select(SETTINGS_SELECT)
-    .eq("auth_user_id", user.id)
-    .single();
+const PATCHABLE_COLUMNS = [
+  "name",
+  "phone",
+  "notification_email",
+  "deljit_email_alerts",
+  "default_currency",
+  "default_incoterm",
+  "default_payment_terms",
+  "default_facility",
+  "default_uom",
+  "default_transport_mode",
+  "default_carrier",
+  "default_response_code"
+] as const;
 
-  if (error || !data) {
-    return { status: 500 as const, body: { error: error?.message ?? "Supplier not found" } };
+export async function getSettings(portalUser: PortalAuthUser, supplierId: string) {
+  try {
+    const { rows } = await getOperationsPool().query<Record<string, unknown>>(
+      `SELECT ${SETTINGS_SELECT} FROM suppliers WHERE id = $1 LIMIT 1`,
+      [supplierId]
+    );
+
+    const data = rows[0];
+    if (!data) {
+      return { status: 500 as const, body: { error: "Supplier not found" } };
+    }
+    return { status: 200 as const, body: { ...data, authEmail: portalUser.email ?? "" } };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to load settings";
+    return { status: 500 as const, body: { error: message } };
   }
-  return { status: 200 as const, body: { ...data, authEmail: user.email ?? "" } };
 }
 
-export async function patchSettings(user: User, supabase: SupabaseClient, body: unknown) {
+export async function patchSettings(
+  portalUser: PortalAuthUser,
+  supplierId: string,
+  body: unknown
+) {
   const parsed = settingsPatchSchema.safeParse(body);
   if (!parsed.success) {
     return { status: 400 as const, body: { error: parsed.error.flatten() } };
   }
 
-  const { data, error } = await supabase
-    .from("suppliers")
-    .update(parsed.data)
-    .eq("auth_user_id", user.id)
-    .select(SETTINGS_SELECT)
-    .single();
+  const updates = parsed.data;
+  const setClauses: string[] = [];
+  const values: unknown[] = [supplierId];
+  let paramIndex = 2;
 
-  if (error || !data) {
-    return { status: 500 as const, body: { error: error?.message ?? "Update failed" } };
+  for (const column of PATCHABLE_COLUMNS) {
+    if (column in updates) {
+      setClauses.push(`${column} = $${paramIndex}`);
+      values.push(updates[column as keyof typeof updates]);
+      paramIndex += 1;
+    }
   }
-  return { status: 200 as const, body: { ...data, authEmail: user.email ?? "" } };
+
+  if (setClauses.length === 0) {
+    return getSettings(portalUser, supplierId);
+  }
+
+  try {
+    const { rows } = await getOperationsPool().query<Record<string, unknown>>(
+      `UPDATE suppliers
+       SET ${setClauses.join(", ")}
+       WHERE id = $1
+       RETURNING ${SETTINGS_SELECT}`,
+      values
+    );
+
+    const data = rows[0];
+    if (!data) {
+      return { status: 500 as const, body: { error: "Update failed" } };
+    }
+    return { status: 200 as const, body: { ...data, authEmail: portalUser.email ?? "" } };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Update failed";
+    return { status: 500 as const, body: { error: message } };
+  }
 }
 
 export function getIntegrationStatus() {

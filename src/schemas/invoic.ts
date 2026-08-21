@@ -22,7 +22,7 @@ export const invoicPayloadSchema = z.object({
   invoiceDate: compactYmdDateSchema,
   dueDate: z.union([z.literal(""), compactYmdDateSchema]),
   poReference: z.string().min(1),
-  asnReference: z.string().min(1),
+  asnReference: z.string(),
   deljitReference: z.string(),
   currency: z.string().min(1),
   paymentTerms: z.string().min(1),

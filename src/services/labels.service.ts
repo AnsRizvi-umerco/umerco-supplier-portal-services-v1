@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { supabaseAdmin } from "@/integrations/supabase/admin";
+import { getOperationsPool } from "@/config/operations-db";
 import { resolveFacilityLabel } from "@/utils/facilities";
 
 const reqSchema = z.object({
@@ -40,13 +40,12 @@ export async function generateLabels(body: unknown) {
   const parsed = reqSchema.safeParse(body);
   if (!parsed.success) return { status: 400 as const, body: { labels: [] } };
 
-  const { data: submission } = await supabaseAdmin
-    .from("submissions")
-    .select("canonical_json")
-    .eq("id", parsed.data.submissionId)
-    .single();
+  const { rows } = await getOperationsPool().query<{ canonical_json: unknown }>(
+    "SELECT canonical_json FROM submissions WHERE id = $1 LIMIT 1",
+    [parsed.data.submissionId]
+  );
 
-  const canonical = submission?.canonical_json as { payload?: Record<string, unknown> } | null | undefined;
+  const canonical = rows[0]?.canonical_json as { payload?: Record<string, unknown> } | null | undefined;
   const payload = canonical?.payload;
   const lines = (Array.isArray(payload?.lines) ? payload.lines : []) as Record<string, unknown>[];
 

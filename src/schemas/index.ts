@@ -12,6 +12,7 @@ export * from "@/schemas/aperak";
 export * from "@/schemas/ordrsp";
 export * from "@/schemas/desadv";
 export * from "@/schemas/invoic";
+export * from "@/schemas/inbound-po";
 export * from "@/schemas/status-callback";
 
 export const submitMessageSchema = z.discriminatedUnion("messageType", [

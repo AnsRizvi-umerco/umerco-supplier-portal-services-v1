@@ -1,7 +1,9 @@
-import type { SupabaseClient, User } from "@supabase/supabase-js";
-import type { SupplierRow } from "@/middleware/auth";
+import type { PortalAuthUser, SupplierRow } from "@/middleware/auth";
+import { getOperationsPool } from "@/config/operations-db";
+import { resolveDataScope, scopePredicate } from "@/utils/data-scope";
 
-const PROFILE_SELECT = "id, code, name, email, language, status, phone, created_at";
+const PROFILE_SELECT =
+  "id, code, name, email, language, status, phone, created_at";
 
 function startOfCurrentUtcMonth(): string {
   const now = new Date();
@@ -10,65 +12,92 @@ function startOfCurrentUtcMonth(): string {
 
 export async function getProfile(
   supplier: SupplierRow | null | undefined,
-  user: User | undefined,
-  supabase: SupabaseClient | undefined
+  portalUser: PortalAuthUser | undefined
 ) {
-  if (!supplier || !user || !supabase) {
+  if (!portalUser) {
     return { status: 401 as const, body: { error: "Unauthorized" } };
   }
-
-  const { data: profile, error } = await supabase
-    .from("suppliers")
-    .select(PROFILE_SELECT)
-    .eq("auth_user_id", user.id)
-    .single();
-
-  if (error || !profile) {
-    return { status: 500 as const, body: { error: error?.message ?? "Supplier not found" } };
+  if (!supplier) {
+    return {
+      status: 503 as const,
+      body: { error: "Operations database is unavailable." }
+    };
   }
 
-  const monthStart = startOfCurrentUtcMonth();
-  const [totalSubsRes, monthSubsRes, schedulesRes, lastSubRes] = await Promise.all([
-    supabase.from("submissions").select("id", { count: "exact", head: true }).eq("supplier_id", supplier.id),
-    supabase
-      .from("submissions")
-      .select("id", { count: "exact", head: true })
-      .eq("supplier_id", supplier.id)
-      .gte("created_at", monthStart),
-    supabase
-      .from("delivery_schedules")
-      .select("id", { count: "exact", head: true })
-      .eq("supplier_id", supplier.id),
-    supabase
-      .from("submissions")
-      .select("created_at")
-      .eq("supplier_id", supplier.id)
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle()
-  ]);
+  const pool = getOperationsPool();
 
-  const lastSubmissionAt = lastSubRes.data?.created_at ?? null;
-  const lastActiveAt = lastSubmissionAt ?? user.last_sign_in_at ?? null;
+  try {
+    const { rows: profileRows } = await pool.query<{
+      id: string;
+      code: string;
+      name: string;
+      email: string;
+      language: string;
+      status: string;
+      phone: string | null;
+      created_at: string;
+    }>(
+      `SELECT ${PROFILE_SELECT} FROM suppliers WHERE id = $1 LIMIT 1`,
+      [supplier.id]
+    );
 
-  return {
-    status: 200 as const,
-    body: {
-      id: profile.id,
-      code: profile.code,
-      name: profile.name,
-      status: profile.status,
-      language: profile.language,
-      memberSince: profile.created_at,
-      phone: profile.phone,
-      authEmail: user.email ?? profile.email ?? "",
-      lastSignInAt: user.last_sign_in_at ?? null,
-      stats: {
-        totalSubmissions: totalSubsRes.count ?? 0,
-        submissionsThisMonth: monthSubsRes.count ?? 0,
-        schedulesReceived: schedulesRes.count ?? 0,
-        lastActiveAt
-      }
+    const profile = profileRows[0];
+    if (!profile) {
+      return { status: 500 as const, body: { error: "Supplier not found" } };
     }
-  };
+
+    const monthStart = startOfCurrentUtcMonth();
+    const scope = resolveDataScope(portalUser, supplier) ?? {
+      companyId: portalUser.business_partner_id,
+      supplierId: supplier.id
+    };
+    const [totalSubsRes, monthSubsRes, schedulesRes, lastSubRes] = await Promise.all([
+      pool.query<{ count: string }>(
+        `SELECT COUNT(*)::text AS count FROM submissions WHERE ${scopePredicate(1, 2)}`,
+        [scope.companyId, scope.supplierId]
+      ),
+      pool.query<{ count: string }>(
+        `SELECT COUNT(*)::text AS count FROM submissions WHERE ${scopePredicate(1, 2)} AND created_at >= $3`,
+        [scope.companyId, scope.supplierId, monthStart]
+      ),
+      pool.query<{ count: string }>(
+        `SELECT COUNT(*)::text AS count FROM delivery_schedules WHERE ${scopePredicate(1, 2)}`,
+        [scope.companyId, scope.supplierId]
+      ),
+      pool.query<{ created_at: string }>(
+        `SELECT created_at FROM submissions
+         WHERE ${scopePredicate(1, 2)}
+         ORDER BY created_at DESC
+         LIMIT 1`,
+        [scope.companyId, scope.supplierId]
+      )
+    ]);
+
+    const lastSubmissionAt = lastSubRes.rows[0]?.created_at ?? null;
+    const lastActiveAt = lastSubmissionAt ?? null;
+
+    return {
+      status: 200 as const,
+      body: {
+        id: profile.id,
+        code: profile.code,
+        name: profile.name,
+        status: profile.status,
+        language: profile.language,
+        memberSince: profile.created_at,
+        phone: profile.phone,
+        authEmail: portalUser.email ?? profile.email ?? "",
+        lastSignInAt: null,
+        stats: {
+          totalSubmissions: Number(totalSubsRes.rows[0]?.count ?? 0),
+          submissionsThisMonth: Number(monthSubsRes.rows[0]?.count ?? 0),
+          schedulesReceived: Number(schedulesRes.rows[0]?.count ?? 0),
+          lastActiveAt
+        }
+      }
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to load profile";
+    return { status: 500 as const, body: { error: message } };
+  }
 }

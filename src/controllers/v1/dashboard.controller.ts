@@ -7,10 +7,13 @@ import * as profileService from "@/services/profile.service";
 export const getDashboard = asyncHandler(async (req, res) => {
   const authed = req as AuthedRequest;
   const query = req.url.includes("?") ? req.url.split("?")[1]! : "";
-  sendServiceResult(res, await dashboardService.getDashboard(authed.supplier, authed.supabase, query));
+  sendServiceResult(res, await dashboardService.getDashboard(authed.supplier, authed.portalUser, query));
 });
 
 export const getProfile = asyncHandler(async (req, res) => {
   const authed = req as AuthedRequest;
-  sendServiceResult(res, await profileService.getProfile(authed.supplier, authed.user, authed.supabase));
+  sendServiceResult(
+    res,
+    await profileService.getProfile(authed.supplier, authed.portalUser)
+  );
 });

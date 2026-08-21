@@ -1,10 +1,11 @@
 import cors from "cors";
 import express from "express";
 import { API_BASE_PATH } from "@/constants/api";
-import { attachAuth } from "@/middleware/auth";
+import { attachAuth, bindOperationsPool } from "@/middleware/auth";
 import { errorHandler } from "@/middleware/errorHandler";
 import v1Routes from "@/routes/v1/index";
 import webhooksRoutes from "@/routes/v1/webhooks.routes";
+import inboundRoutes from "@/routes/v1/inbound.routes";
 
 export function createApp() {
   const app = express();
@@ -34,10 +35,18 @@ export function createApp() {
     webhooksRoutes
   );
 
+  app.use(
+    `${API_BASE_PATH}/inbound`,
+    express.json({ limit: "2mb" }),
+    express.text({ type: "text/plain", limit: "2mb" }),
+    inboundRoutes
+  );
+
   app.use(express.json({ limit: "2mb" }));
   app.use(express.text({ type: "text/plain", limit: "2mb" }));
 
   app.use(attachAuth);
+  app.use(bindOperationsPool);
   app.use(API_BASE_PATH, v1Routes);
 
   app.use(errorHandler);

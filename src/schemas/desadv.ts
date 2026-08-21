@@ -13,7 +13,8 @@ export const desadvLineSchema = z.object({
   description: z.string().min(1),
   qtyShipped: positiveIntStringSchema,
   uom: z.string().min(1),
-  containerType: z.string().min(1)
+  containerType: z.string().min(1),
+  poDate: compactYmdDateSchema.optional()
 });
 
 export const desadvPayloadSchema = z.object({
@@ -27,6 +28,9 @@ export const desadvPayloadSchema = z.object({
   trackingNo: z.string().min(1),
   bolNumber: z.string().min(1),
   shipToFacility: z.string().min(1),
+  shipFromId: z.string().optional(),
+  shipToId: z.string().optional(),
+  usageIndicator: z.enum(["P", "T"]).optional(),
   packageCount: positiveIntStringSchema,
   packageType: z.string().min(1),
   grossWeight: nonNegativeDecimalStringSchema,

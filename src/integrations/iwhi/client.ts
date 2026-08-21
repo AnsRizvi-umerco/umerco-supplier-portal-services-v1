@@ -1,11 +1,20 @@
-import { IWHI_CONFIG, getChannelPath, type DocumentType } from "./config";
+import { IWHI_CONFIG, type DocumentType } from "./config";
 import { stringifyPayloadDeep } from "@/integrations/iwhi/stringify-payload";
+import { buildInvoicChannelBody } from "@/integrations/iwhi/invoic-channel-body";
+import { buildDesadvChannelBody } from "@/integrations/iwhi/desadv-channel-body";
+import { buildAck855ChannelBody } from "@/integrations/iwhi/ack-855-channel-body";
 
 export interface IwhiEnvelope {
   messageType: DocumentType;
   supplierCode: string;
   tradingPartner: string;
   payload: Record<string, unknown>;
+  channelUrl: string;
+  commsUsername: string;
+  commsPassword: string;
+  buyerId?: string;
+  supplierPartyId?: string;
+  controlNo?: string;
 }
 
 export interface IwhiResponse {
@@ -14,31 +23,15 @@ export interface IwhiResponse {
   error?: string;
   statusCode: number;
   retryable: boolean;
+  channelRequest?: {
+    url: string;
+    headers: Record<string, string>;
+    body: Record<string, unknown>;
+  };
 }
 
-function getAuthHeaders(): Record<string, string> {
-  switch (IWHI_CONFIG.authType) {
-    case "basic": {
-      const username = process.env.IWHI_AUTH_USERNAME ?? "";
-      const password = process.env.IWHI_AUTH_PASSWORD ?? "";
-      const encoded = Buffer.from(`${username}:${password}`).toString("base64");
-      return { Authorization: `Basic ${encoded}` };
-    }
-    case "bearer": {
-      const token =
-        process.env.IWHI_AUTH_TOKEN?.trim() ||
-        process.env.IWHI_API_KEY?.trim() ||
-        process.env.IWHI_AUTH_USERNAME?.trim();
-      if (!token) return {};
-      return { Authorization: `Bearer ${token}` };
-    }
-    case "certificate":
-      return {};
-    case "none":
-      return {};
-    default:
-      return {};
-  }
+function basicAuthHeader(username: string, password: string): string {
+  return `Basic ${Buffer.from(`${username}:${password}`).toString("base64")}`;
 }
 
 function isAbortError(error: unknown): boolean {
@@ -77,56 +70,109 @@ async function postWithRetry(
   }
 }
 
-function isMockMode(): boolean {
-  const base = IWHI_CONFIG.baseUrl;
-  return !base || base.includes("localhost:3001") || base === "mock";
+function isMockChannel(channelUrl: string): boolean {
+  if (process.env.IWHI_MOCK?.trim().toLowerCase() === "true") return true;
+  const value = channelUrl.trim().toLowerCase();
+  return value === "mock" || value === "http://mock" || value === "https://mock";
 }
 
-function mockResponse(): IwhiResponse {
+function channelRequestPreview(
+  url: string,
+  headers: Record<string, string>,
+  body: Record<string, unknown>
+): NonNullable<IwhiResponse["channelRequest"]> {
   return {
-    success: true,
-    messageId: `mock-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-    statusCode: 200,
-    retryable: false
+    url,
+    headers: {
+      ...headers,
+      Authorization: "Basic ***"
+    },
+    body
   };
 }
 
+function resolveChannelUrl(channelUrl: string): string | null {
+  const stored = channelUrl.trim();
+  if (!stored) return null;
+  if (/^https:\/\//i.test(stored)) return stored;
+  if (/^http:\/\//i.test(stored)) return `https://${stored.slice("http://".length)}`;
+  return null;
+}
+
 /**
- * Send a canonical JSON envelope to IWHI.
- * Handles auth, retries, timeouts, mock mode, and error classification.
+ * HTTPS POST the envelope to the supplier channel URL as text/plain.
+ * Auth is HTTP Basic using communication credentials.
  */
 export async function sendToIwhi(envelope: IwhiEnvelope): Promise<IwhiResponse> {
-  if (isMockMode()) {
-    console.log("[IWHI Mock] Would send:", envelope.messageType, envelope.supplierCode);
-    return mockResponse();
-  }
-
-  const channelPath = getChannelPath(envelope.messageType, envelope.tradingPartner);
-  const url = `${IWHI_CONFIG.baseUrl}${channelPath}`;
-  const instanceApiKey = process.env.IWHI_INSTANCE_API_KEY?.trim();
-  const needsInstanceApiKey =
-    envelope.messageType === "INVOIC" || envelope.messageType === "DESADV";
-
-  if (needsInstanceApiKey && !instanceApiKey) {
+  const url = resolveChannelUrl(envelope.channelUrl);
+  if (!url) {
     return {
       success: false,
-      error: "Missing IWHI_INSTANCE_API_KEY for INVOIC or DESADV (ASN) submission",
+      error: "Channel URL is missing or is not an absolute https URL.",
       statusCode: 400,
       retryable: false
     };
   }
 
-  const wireEnvelope: IwhiEnvelope = {
-    ...envelope,
-    payload: stringifyPayloadDeep(envelope.payload) as Record<string, unknown>
+  if (!envelope.commsUsername.trim() || !envelope.commsPassword.trim()) {
+    return {
+      success: false,
+      error: "Communication credentials are required to send to the channel URL.",
+      statusCode: 400,
+      retryable: false
+    };
+  }
+
+  const partyIds = {
+    senderId: envelope.supplierCode,
+    receiverId: envelope.tradingPartner,
+    buyerId: envelope.buyerId?.trim() || envelope.tradingPartner,
+    supplierPartyId: envelope.supplierPartyId?.trim() || envelope.supplierCode,
+    controlNo: envelope.controlNo,
+    payload: envelope.payload
   };
+
+  const wireEnvelope =
+    envelope.messageType === "INVOIC"
+      ? buildInvoicChannelBody(partyIds)
+      : envelope.messageType === "DESADV"
+        ? buildDesadvChannelBody(partyIds)
+        : envelope.messageType === "ORDRSP"
+          ? buildAck855ChannelBody({ ...partyIds, includeSchedules: false })
+          : envelope.messageType === "APERAK"
+            ? buildAck855ChannelBody({ ...partyIds, includeSchedules: true })
+            : {
+                messageType: envelope.messageType,
+                supplierCode: envelope.supplierCode,
+                tradingPartner: envelope.tradingPartner,
+                payload: stringifyPayloadDeep(envelope.payload) as Record<string, unknown>
+              };
   const body = JSON.stringify(wireEnvelope);
 
   const headers: Record<string, string> = {
     "Content-Type": "text/plain",
-    ...getAuthHeaders(),
-    ...(needsInstanceApiKey && instanceApiKey ? { "X-INSTANCE-API-KEY": instanceApiKey } : {})
+    Authorization: basicAuthHeader(
+      envelope.commsUsername.trim(),
+      envelope.commsPassword.trim()
+    )
   };
+
+  const channelRequest = channelRequestPreview(url, headers, wireEnvelope);
+
+  if (isMockChannel(url)) {
+    console.log("[IWHI Mock] Would send:", {
+      url: channelRequest.url,
+      messageType: envelope.messageType,
+      supplierCode: envelope.supplierCode,
+      tradingPartner: envelope.tradingPartner
+    });
+    return {
+      success: true,
+      statusCode: 200,
+      retryable: false,
+      channelRequest
+    };
+  }
 
   try {
     const response = await postWithRetry(url, body, headers);
@@ -142,10 +188,10 @@ export async function sendToIwhi(envelope: IwhiEnvelope): Promise<IwhiResponse> 
     if (response.ok) {
       return {
         success: true,
-        messageId:
-          (parsed.messageId as string | undefined) || response.headers.get("X-Message-Id") || undefined,
+        messageId: (parsed.messageId as string | undefined) || undefined,
         statusCode: response.status,
-        retryable: false
+        retryable: false,
+        channelRequest
       };
     }
 
@@ -155,19 +201,21 @@ export async function sendToIwhi(envelope: IwhiEnvelope): Promise<IwhiResponse> 
       error:
         (parsed.error as string | undefined) ||
         (parsed.message as string | undefined) ||
-        `IWHI returned ${response.status}`,
+        `Channel returned ${response.status}`,
       statusCode: response.status,
-      retryable
+      retryable,
+      channelRequest
     };
   } catch (error) {
     const timedOut = isAbortError(error);
     return {
       success: false,
       error: timedOut
-        ? `IWHI timeout after ${IWHI_CONFIG.timeout}ms`
-        : `IWHI connection failed: ${error instanceof Error ? error.message : String(error)}`,
+        ? `Channel timeout after ${IWHI_CONFIG.timeout}ms`
+        : `Channel connection failed: ${error instanceof Error ? error.message : String(error)}`,
       statusCode: 0,
-      retryable: true
+      retryable: true,
+      channelRequest
     };
   }
 }

@@ -1,5 +1,5 @@
 import type { SubmitMessage } from "@/schemas";
-import { supabaseAdmin } from "@/integrations/supabase/admin";
+import { getOperationsPool } from "@/config/operations-db";
 
 export function getDeljitRefFromSubmitMessage(message: SubmitMessage): string | undefined {
   switch (message.messageType) {
@@ -21,29 +21,32 @@ export async function validateTradingPartnerAgainstSchedule(
   tradingPartner: string,
   deljitRef: string
 ): Promise<{ ok: true } | { ok: false; error: string }> {
-  const { data: schedule, error } = await supabaseAdmin
-    .from("delivery_schedules")
-    .select("canonical_json")
-    .eq("deljit_ref", deljitRef)
-    .eq("supplier_id", supplierId)
-    .maybeSingle();
+  try {
+    const { rows } = await getOperationsPool().query<{ canonical_json: unknown }>(
+      `SELECT canonical_json
+       FROM delivery_schedules
+       WHERE deljit_ref = $1 AND supplier_id = $2
+       LIMIT 1`,
+      [deljitRef, supplierId]
+    );
 
-  if (error) {
+    const schedule = rows[0];
+    if (!schedule) {
+      return { ok: false, error: "Schedule not found for deljit reference" };
+    }
+
+    const canonical = schedule.canonical_json;
+    const expectedPartner =
+      canonical && typeof canonical === "object" && "tradingPartner" in canonical
+        ? String((canonical as { tradingPartner: unknown }).tradingPartner ?? "")
+        : "";
+
+    if (!expectedPartner || tradingPartner !== expectedPartner) {
+      return { ok: false, error: "Trading partner mismatch" };
+    }
+
+    return { ok: true };
+  } catch {
     return { ok: false, error: "Could not verify trading partner against schedule" };
   }
-  if (!schedule) {
-    return { ok: false, error: "Schedule not found for deljit reference" };
-  }
-
-  const canonical = schedule.canonical_json;
-  const expectedPartner =
-    canonical && typeof canonical === "object" && "tradingPartner" in canonical
-      ? String((canonical as { tradingPartner: unknown }).tradingPartner ?? "")
-      : "";
-
-  if (!expectedPartner || tradingPartner !== expectedPartner) {
-    return { ok: false, error: "Trading partner mismatch" };
-  }
-
-  return { ok: true };
 }
