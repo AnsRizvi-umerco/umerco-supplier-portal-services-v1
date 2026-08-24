@@ -30,8 +30,8 @@ function invoiceTypeCode(invoiceType: string): string {
 
 function mapUom(uom: string): string {
   const value = uom.trim().toUpperCase();
-  if (value === "EA" || value === "EACH") return "PCE";
-  return value || "PCE";
+  if (value === "EA" || value === "EACH" || value === "PCE") return "PC";
+  return value || "PC";
 }
 
 function padControlNo(value: string): string {
@@ -71,14 +71,14 @@ export function buildInvoicChannelBody(input: {
   const lines = rawLines.map((line, index) => {
     const lineAmount = money(line.lineTotal);
     return {
-      lineNo: asString(line.poLine, String(index + 1)),
+      lineNo: asString(line.poLine, String(index + 1)).replace(/^0+/, "") || String(index + 1),
       itemCode: asString(line.partNo),
       description: asString(line.description),
       quantity: asString(line.qty),
       uom: mapUom(asString(line.uom, "PCE")),
       lineAmount,
       taxType: "VAT",
-      taxRate,
+      taxRate: money(taxRate),
       taxAmount: lineTaxAmount(lineAmount, taxRate)
     };
   });
