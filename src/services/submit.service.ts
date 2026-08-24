@@ -6,6 +6,21 @@ import {
   validateTradingPartnerAgainstSchedule
 } from "@/services/submissions/validate-trading-partner";
 
+function documentLabel(messageType: string): string {
+  switch (messageType) {
+    case "ORDRSP":
+      return "PO Ack";
+    case "INVOIC":
+      return "Invoice";
+    case "DESADV":
+      return "ASN";
+    case "APERAK":
+      return "Schedule Ack";
+    default:
+      return messageType;
+  }
+}
+
 function missingFieldError(field: string) {
   return {
     status: 400 as const,
@@ -30,7 +45,7 @@ export async function submitDocument(
         status: 403 as const,
         body: {
           success: false,
-          error: `${parsed.data.messageType} is not enabled for this supplier.`
+          error: `${documentLabel(parsed.data.messageType)} is not enabled for this supplier.`
         }
       };
     }

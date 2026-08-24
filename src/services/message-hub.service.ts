@@ -232,7 +232,7 @@ export async function listMessageHub(
         fa: mapped.fa,
         docStatus: mapped.docStatus,
         counterparty: row.counterparty?.trim() || "—",
-        href: row.href,
+        href: portalUser?.actor === "partner_admin" ? null : row.href,
         supplierName: row.supplier_name?.trim() || "—",
         supplierId: row.master_supplier_id
       };

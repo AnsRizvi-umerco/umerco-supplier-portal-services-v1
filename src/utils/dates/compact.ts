@@ -10,18 +10,21 @@ export function isYyyymmddValid(s: string): boolean {
 }
 
 /**
- * Convert HTML date input value (YYYY-MM-DD) or existing YYYYMMDD to compact YYYYMMDD.
+ * Convert HTML date input (YYYY-MM-DD), ISO datetime, or YYYYMMDD to compact YYYYMMDD.
  * Returns "" for empty/whitespace input.
  */
 export function toCompactYyyymmdd(value: string): string {
   const t = value.trim();
   if (!t) return "";
   if (/^\d{8}$/.test(t)) return t;
-  if (/^\d{4}-\d{2}-\d{2}$/.test(t)) return t.replace(/-/g, "");
+  const day = t.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (day) return `${day[1]}${day[2]}${day[3]}`;
+  const digits = t.replace(/\D/g, "");
+  if (digits.length >= 8) return digits.slice(0, 8);
   return t;
 }
 
-/** Local calendar today as YYYYMMDD (for defaulting date inputs via value=YYYY-MM-DD). */
+/** Local calendar today as YYYY-MM-DD for HTML date inputs. */
 export function todayLocalIsoDateInput(): string {
   const d = new Date();
   const y = d.getFullYear();
