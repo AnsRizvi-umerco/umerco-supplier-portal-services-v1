@@ -74,7 +74,6 @@ export async function ensureOperationsScopeSchema(pool: Pool): Promise<void> {
 
   await ensureNotificationsTable(pool);
   await ensureScheduleStatusConstraint(pool);
-  await ensureAsnDraftSchema(pool);
 }
 
 const notificationsEnsured = new WeakSet<Pool>();
@@ -178,47 +177,4 @@ export async function backfillTransactionCompanyIds(pool: Pool): Promise<void> {
       AND ds.company_id IS NULL
       AND sup.company_id IS NOT NULL;
   `);
-}
-
-const asnSchemaEnsured = new WeakSet<Pool>();
-
-export async function ensureAsnDraftSchema(pool: Pool): Promise<void> {
-  if (asnSchemaEnsured.has(pool)) return;
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS asn_drafts (
-      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-      supplier_id uuid NOT NULL REFERENCES suppliers(id) ON DELETE CASCADE,
-      company_id uuid,
-      asn_number text NOT NULL,
-      status text NOT NULL DEFAULT 'draft',
-      shipment jsonb NOT NULL,
-      created_at timestamptz NOT NULL DEFAULT now(),
-      updated_at timestamptz NOT NULL DEFAULT now(),
-      submitted_at timestamptz
-    );
-
-    CREATE UNIQUE INDEX IF NOT EXISTS asn_drafts_asn_number_uidx
-      ON asn_drafts (asn_number);
-
-    CREATE INDEX IF NOT EXISTS asn_drafts_supplier_updated_idx
-      ON asn_drafts (supplier_id, updated_at DESC);
-
-    CREATE TABLE IF NOT EXISTS licence_plates (
-      plate text PRIMARY KEY,
-      supplier_id uuid NOT NULL REFERENCES suppliers(id) ON DELETE CASCADE,
-      draft_id uuid REFERENCES asn_drafts(id) ON DELETE SET NULL,
-      kind text NOT NULL,
-      voided_at timestamptz
-    );
-
-    CREATE TABLE IF NOT EXISTS licence_plate_counters (
-      supplier_id uuid NOT NULL REFERENCES suppliers(id) ON DELETE CASCADE,
-      ship_from_code text NOT NULL,
-      next_serial integer NOT NULL DEFAULT 1,
-      PRIMARY KEY (supplier_id, ship_from_code)
-    );
-  `);
-
-  asnSchemaEnsured.add(pool);
 }

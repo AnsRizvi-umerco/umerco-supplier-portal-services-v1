@@ -6,7 +6,6 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "typecheck": "tsc --noEmit",
-    "test:asn-packaging": "tsx src/services/asn/run-packaging-cases.ts",
     "build": "node esbuild.config.mjs",
     "vercel-build": "npm run build",
     "start": "tsx src/index.ts",

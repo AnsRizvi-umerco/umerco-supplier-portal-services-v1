@@ -1,10 +1,15 @@
 import { stringifyPayloadDeep } from "@/integrations/iwhi/stringify-payload";
-import {
-  palletKind,
-  shipmentTotals,
-  type AsnShipment,
-  type AsnUnitLoad
-} from "@/services/asn/domain";
+
+type AsnLineIn = {
+  poNumber?: unknown;
+  poLine?: unknown;
+  partNo?: unknown;
+  description?: unknown;
+  qtyShipped?: unknown;
+  uom?: unknown;
+  containerType?: unknown;
+  poDate?: unknown;
+};
 
 function asString(value: unknown, fallback = ""): string {
   if (value == null) return fallback;
@@ -40,8 +45,6 @@ function mapTransportMethod(mode: string): string {
   if (value === "AIR" || value === "A") return "A";
   if (value === "SEA" || value === "OCEAN" || value === "S") return "S";
   if (value === "RAIL" || value === "R") return "R";
-  if (value === "PARCEL") return "U";
-  if (value === "HAND_CARRY") return "H";
   return "M";
 }
 
@@ -53,44 +56,63 @@ function mapEquipmentType(mode: string): string {
   return "TL";
 }
 
+function mapPackagingCode(packageType: string, containerType?: string): string {
+  const value = (packageType || containerType || "").trim().toUpperCase();
+  if (value === "PALLET" || value === "PLT") return "PLT";
+  if (value === "CRATE" || value === "CRT") return "CRT";
+  if (value === "TOTE") return "TOT";
+  if (value.startsWith("CTN")) return value;
+  return "CTN25";
+}
+
 function mapUom(uom: string): string {
   const value = uom.trim().toUpperCase();
   if (value === "EA" || value === "EACH" || value === "PCS") return "PC";
   return value || "PC";
 }
 
-function asShipment(payload: Record<string, unknown>): AsnShipment | null {
-  if (!payload.asnNumber || !Array.isArray(payload.releases) || !Array.isArray(payload.unitLoads)) {
-    return null;
-  }
-  return payload as unknown as AsnShipment;
+function mapWeightUom(uom: string): string {
+  const value = uom.trim().toUpperCase();
+  if (value === "KG" || value === "KGM") return "KG";
+  if (value === "LB" || value === "LBR") return "LB";
+  return "LB";
 }
 
-function packsFromLoads(shipment: AsnShipment) {
-  return shipment.unitLoads
-    .filter((load) => load.cartons.length > 0)
-    .map((load) => {
-      const kind = palletKind(load, shipment.releases);
-      const items = load.cartons.map((carton) => {
-        const release = shipment.releases.find((row) => row.id === carton.releaseId);
-        const data = release?.turnaround.data;
-        return {
-          buyerLineNo: data?.itemNumber || "1",
-          itemCode: data?.partNo || "",
-          itemCodeQualifier: "VP",
-          description: data?.description || "",
-          quantityShipped: String(carton.qty),
-          uom: mapUom(data?.uom || "PC"),
-          licencePlate: carton.licencePlate,
-          releaseNumber: data?.releaseNumber
-        };
-      });
-      return {
-        sscc: load.licencePlate || load.cartons[0]?.licencePlate || "",
-        palletKind: kind,
-        items
-      };
-    });
+function optionalMeasure(value: unknown): string | undefined {
+  const measure = asString(value);
+  return measure || undefined;
+}
+
+function scac(carrier: string): string {
+  const letters = carrier.replace(/[^A-Za-z]/g, "").toUpperCase();
+  return (letters.slice(0, 4) || "XXXX").padEnd(4, "X");
+}
+
+function buyerLineNo(poLine: string, index: number): string {
+  const digits = poLine.replace(/\D/g, "");
+  if (digits) return String(parseInt(digits, 10));
+  return String(index + 1);
+}
+
+function splitQuantity(total: number, packCount: number, packIndex: number): number {
+  if (packCount <= 1) return total;
+  const base = Math.floor(total / packCount);
+  const remainder = total - base * packCount;
+  return base + (packIndex < remainder ? 1 : 0);
+}
+
+function buildSscc(senderId: string, serial: number): string {
+  const prefix = senderId.replace(/\D/g, "").padStart(13, "0").slice(-13);
+  const serialPart = String(Math.max(1, serial)).padStart(3, "0").slice(-3);
+  return `00${prefix}${serialPart}`.slice(0, 18);
+}
+
+function equipmentNumber(trackingNo: string, controlNo: string): string {
+  if (trackingNo && trackingNo !== "NO-TRACKING-YET") {
+    const digits = trackingNo.replace(/\D/g, "");
+    return digits || trackingNo.slice(0, 10);
+  }
+  return padControlNo(controlNo).slice(-6);
 }
 
 export function buildDesadvChannelBody(input: {
@@ -102,38 +124,73 @@ export function buildDesadvChannelBody(input: {
   payload: Record<string, unknown>;
 }): Record<string, unknown> {
   const payload = input.payload;
-  const shipment = asShipment(payload);
-  const shipDate = compactDate(
-    asString(payload.shipDate),
-    new Date().toISOString().slice(0, 10).replace(/-/g, "")
-  );
+  const shipDate = compactDate(asString(payload.shipDate), new Date().toISOString().slice(0, 10).replace(/-/g, ""));
   const shipTime = compactTime(asString(payload.shipTime));
   const controlNo = padControlNo(input.controlNo ?? String(Date.now()));
   const groupControlNo = String(parseInt(controlNo, 10) || 1);
+  const packCount = Math.max(1, parseInt(asString(payload.packageCount, "1"), 10) || 1);
+  const rawLines = Array.isArray(payload.lines) ? (payload.lines as AsnLineIn[]) : [];
+  const packageType = asString(payload.packageType, "CARTON");
   const senderId = asString(input.senderId);
   const receiverId = asString(input.receiverId);
-  const totals = shipment ? shipmentTotals(shipment) : { cartonCount: 0, palletCount: 0, grossWeightKg: 0, netWeightKg: 0, piecesPerPart: [] };
-  const carrierScac = asString(payload.carrierScac).slice(0, 4).padEnd(4, "X");
+  const shipFromId = asString(payload.shipFromId) || senderId || asString(input.supplierPartyId);
+  const shipToId = asString(payload.shipToId) || receiverId || asString(input.buyerId);
+  const carrierCode = scac(asString(payload.carrier));
   const transportMode = asString(payload.transportMode);
-  const shipFrom = shipment?.shipFrom;
-  const shipTo = shipment?.shipTo;
-  const trackingNo = asString(payload.trackingNo);
 
-  const ordersByPo = new Map<string, { poNumber: string; packs: ReturnType<typeof packsFromLoads> }>();
-  if (shipment) {
-    const packs = packsFromLoads(shipment);
-    for (const release of shipment.releases.filter((row) => row.qtyToShip > 0)) {
-      const poNumber = release.turnaround.data.poNumber;
-      const current = ordersByPo.get(poNumber) ?? { poNumber, packs: [] };
-      ordersByPo.set(poNumber, current);
-    }
-    const firstPo = [...ordersByPo.keys()][0];
-    if (firstPo) {
-      ordersByPo.get(firstPo)!.packs = packs;
-    } else {
-      ordersByPo.set(asString(payload.asnNumber, "ASN"), { poNumber: asString(payload.asnNumber, "ASN"), packs });
-    }
+  const ordersByPo = new Map<
+    string,
+    { poNumber: string; poDate: string; lines: AsnLineIn[] }
+  >();
+
+  for (const line of rawLines) {
+    const poNumber = asString(line.poNumber);
+    if (!poNumber) continue;
+    const current = ordersByPo.get(poNumber) ?? {
+      poNumber,
+      poDate: compactDate(asString(line.poDate), shipDate),
+      lines: []
+    };
+    current.lines.push(line);
+    ordersByPo.set(poNumber, current);
   }
+
+  const orders = [...ordersByPo.values()].map((order) => {
+    const packs = Array.from({ length: packCount }, (_, packIndex) => {
+      const items = order.lines.flatMap((line, lineIndex) => {
+        const qty = splitQuantity(
+          Math.max(0, parseInt(asString(line.qtyShipped, "0"), 10) || 0),
+          packCount,
+          packIndex
+        );
+        if (qty <= 0) return [];
+        return [
+          {
+            buyerLineNo: buyerLineNo(asString(line.poLine), lineIndex),
+            itemCode: asString(line.partNo),
+            itemCodeQualifier: "VP",
+            description: asString(line.description) || asString(line.partNo),
+            quantityShipped: String(qty),
+            uom: mapUom(asString(line.uom, "PC"))
+          }
+        ];
+      });
+
+      return {
+        sscc: buildSscc(senderId || shipFromId, packIndex + 1),
+        items
+      };
+    }).filter((pack) => pack.items.length > 0);
+
+    return {
+      poNumber: order.poNumber,
+      poDate: order.poDate,
+      packs: packs.length > 0 ? packs : [{ sscc: buildSscc(senderId || shipFromId, 1), items: [] }]
+    };
+  });
+
+  const firstContainer = asString(rawLines[0]?.containerType);
+  const firstUom = asString(rawLines[0]?.uom);
 
   const body = {
     interchange: {
@@ -158,44 +215,40 @@ export function buildDesadvChannelBody(input: {
     },
     payload: {
       purposeCode: "00",
-      shipmentId: asString(payload.asnNumber || payload.asnRef),
+      shipmentId: asString(payload.asnRef),
       shipmentDate: shipDate,
       shipmentTime: shipTime,
       hierarchyCode: "0001",
       shipment: {
-        grossWeight: String(totals.grossWeightKg),
-        netWeight: String(totals.netWeightKg),
-        weightUom: "KG",
-        packagingCode: totals.palletCount > 0 ? "PLT" : "CTN25",
-        ladingQuantity: String(totals.cartonCount),
-        carrierScac,
+        grossWeight: asString(payload.grossWeight, "0"),
+        netWeight: asString(payload.netWeight, "0"),
+        weightUom: mapWeightUom(asString(payload.weightUom) || firstUom),
+        length: optionalMeasure(payload.length),
+        width: optionalMeasure(payload.width),
+        height: optionalMeasure(payload.height),
+        dimensionUom: optionalMeasure(payload.dimensionUom),
+        packagingCode: mapPackagingCode(packageType, firstContainer),
+        ladingQuantity: String(packCount),
+        carrierScac: carrierCode,
         transportMethod: mapTransportMethod(transportMode),
         equipmentType: mapEquipmentType(transportMode),
-        equipmentInitial: carrierScac,
-        equipmentNumber: trackingNo || padControlNo(controlNo).slice(-6),
+        equipmentInitial: carrierCode,
+        equipmentNumber: equipmentNumber(asString(payload.trackingNo), controlNo),
         bolNumber: asString(payload.bolNumber),
         shipFrom: {
-          id: shipFrom?.code || senderId,
+          id: shipFromId,
           qualifier: "UL",
-          name: shipFrom?.name || ""
+          name: asString(payload.supplierName)
         },
         shipTo: {
-          id: shipTo?.code || receiverId,
+          id: shipToId,
           qualifier: "UL",
-          name: shipTo?.name || "",
-          street: shipTo?.street,
-          city: shipTo?.city,
-          postalCode: shipTo?.zip,
-          country: shipTo?.country
+          name: asString(payload.shipToFacility) || asString(payload.buyerCompanyName)
         }
       },
-      orders: [...ordersByPo.values()]
+      orders
     }
   };
 
   return stringifyPayloadDeep(body) as Record<string, unknown>;
-}
-
-export function unitLoadKindForChannel(load: AsnUnitLoad, shipment: AsnShipment) {
-  return palletKind(load, shipment.releases);
 }
