@@ -35,6 +35,11 @@ export const desadvPayloadSchema = z.object({
   packageType: z.string().min(1),
   grossWeight: nonNegativeDecimalStringSchema,
   netWeight: nonNegativeDecimalStringSchema,
+  weightUom: z.string().optional(),
+  length: nonNegativeDecimalStringSchema.optional(),
+  width: nonNegativeDecimalStringSchema.optional(),
+  height: nonNegativeDecimalStringSchema.optional(),
+  dimensionUom: z.string().optional(),
   notes: z.string(),
   lines: z.array(desadvLineSchema).min(1)
 });

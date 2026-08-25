@@ -32,6 +32,7 @@ router.get("/settings/trading-partners", requireSupplier, settingsController.get
 
 router.get("/edifact", requireSupplier, integrationsController.listEdifact);
 router.post("/edifact", integrationsController.ingestEdifact);
+router.get("/labels", requireSupplier, integrationsController.listLabels);
 router.post("/labels", requireSupplier, integrationsController.generateLabels);
 
 export default router;

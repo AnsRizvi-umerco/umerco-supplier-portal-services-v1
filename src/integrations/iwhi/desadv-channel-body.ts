@@ -74,7 +74,13 @@ function mapUom(uom: string): string {
 function mapWeightUom(uom: string): string {
   const value = uom.trim().toUpperCase();
   if (value === "KG" || value === "KGM") return "KG";
+  if (value === "LB" || value === "LBR") return "LB";
   return "LB";
+}
+
+function optionalMeasure(value: unknown): string | undefined {
+  const measure = asString(value);
+  return measure || undefined;
 }
 
 function scac(carrier: string): string {
@@ -215,7 +221,12 @@ export function buildDesadvChannelBody(input: {
       hierarchyCode: "0001",
       shipment: {
         grossWeight: asString(payload.grossWeight, "0"),
-        weightUom: mapWeightUom(firstUom),
+        netWeight: asString(payload.netWeight, "0"),
+        weightUom: mapWeightUom(asString(payload.weightUom) || firstUom),
+        length: optionalMeasure(payload.length),
+        width: optionalMeasure(payload.width),
+        height: optionalMeasure(payload.height),
+        dimensionUom: optionalMeasure(payload.dimensionUom),
         packagingCode: mapPackagingCode(packageType, firstContainer),
         ladingQuantity: String(packCount),
         carrierScac: carrierCode,

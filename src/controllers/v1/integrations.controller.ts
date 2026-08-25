@@ -1,3 +1,4 @@
+import type { AuthedRequest } from "@/middleware/auth";
 import { IWHI_CONFIG } from "@/integrations/iwhi/index";
 import { asyncHandler } from "@/utils/asyncHandler";
 import { sendServiceResult } from "@/utils/http";
@@ -11,6 +12,11 @@ export const ingestEdifact = asyncHandler(async (req, res) => {
 
 export const listEdifact = asyncHandler(async (_req, res) => {
   sendServiceResult(res, await edifactService.listEdifactOutputs());
+});
+
+export const listLabels = asyncHandler(async (req, res) => {
+  const authed = req as AuthedRequest;
+  sendServiceResult(res, await labelsService.listShippingLabels(authed.supplier, authed.portalUser));
 });
 
 export const generateLabels = asyncHandler(async (req, res) => {
