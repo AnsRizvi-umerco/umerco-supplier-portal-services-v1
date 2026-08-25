@@ -55,10 +55,11 @@ export async function finalizeSubmission(params: {
   );
 }
 
-export async function markScheduleInvoiceSent(params: {
+export async function markScheduleOutboundSent(params: {
   supplierId: string;
   companyId: string;
   poReference: string;
+  docType: SubmitMessage["messageType"];
 }): Promise<Array<{ id: string; supplier_id: string; company_id: string | null }>> {
   const poReference = params.poReference.trim();
   if (!poReference) return [];
@@ -73,21 +74,34 @@ export async function markScheduleInvoiceSent(params: {
       company_id: string | null;
     }>(
       `UPDATE delivery_schedules
-       SET status = 'invoice_sent'
+       SET status = CASE
+         WHEN $4 = 'INVOIC' THEN 'invoice_sent'
+         WHEN $4 IN ('ORDRSP', 'APERAK') AND status NOT IN ('invoice_sent', 'completed')
+           THEN 'acknowledged'
+         ELSE status
+       END
        WHERE deljit_ref = $1
          AND (
            supplier_id = $2
            OR company_id = $3
          )
        RETURNING id, supplier_id, company_id`,
-      [poReference, params.supplierId, params.companyId]
+      [poReference, params.supplierId, params.companyId, params.docType]
     );
 
     return rows;
   } catch (error) {
-    console.error("Failed to mark schedule invoice sent:", error);
+    console.error("Failed to mark schedule outbound sent:", error);
     return [];
   }
+}
+
+export async function markScheduleInvoiceSent(params: {
+  supplierId: string;
+  companyId: string;
+  poReference: string;
+}): Promise<Array<{ id: string; supplier_id: string; company_id: string | null }>> {
+  return markScheduleOutboundSent({ ...params, docType: "INVOIC" });
 }
 
 export async function writeSubmissionAudit(params: {

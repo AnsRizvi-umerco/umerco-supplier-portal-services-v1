@@ -86,7 +86,14 @@ export async function listSchedules(
               ds.received_at,
               sup.name AS supplier_name,
               sup.code AS supplier_code,
-              sup.email AS supplier_email
+              sup.email AS supplier_email,
+              COALESCE((
+                SELECT ARRAY_AGG(DISTINCT s.doc_type)
+                FROM submissions s
+                WHERE s.status = 'submitted'
+                  AND s.supplier_id = ds.supplier_id
+                  AND s.deljit_ref = ds.deljit_ref
+              ), ARRAY[]::text[]) AS sent_docs
        FROM delivery_schedules ds
        LEFT JOIN suppliers sup ON sup.id = ds.supplier_id
        WHERE ${filters.join(" AND ")}
@@ -125,6 +132,7 @@ export async function getScheduleById(
       supplier_name: string | null;
       supplier_code: string | null;
       supplier_email: string | null;
+      sent_docs: string[];
     }>(
       `SELECT ds.id,
               ds.deljit_ref,
@@ -136,7 +144,14 @@ export async function getScheduleById(
               ds.canonical_json,
               sup.name AS supplier_name,
               sup.code AS supplier_code,
-              sup.email AS supplier_email
+              sup.email AS supplier_email,
+              COALESCE((
+                SELECT ARRAY_AGG(DISTINCT s.doc_type)
+                FROM submissions s
+                WHERE s.status = 'submitted'
+                  AND s.supplier_id = ds.supplier_id
+                  AND s.deljit_ref = ds.deljit_ref
+              ), ARRAY[]::text[]) AS sent_docs
        FROM delivery_schedules ds
        LEFT JOIN suppliers sup ON sup.id = ds.supplier_id
        WHERE ds.id = $1 AND ${scopePredicateForSchedules(2, 3)}
@@ -198,7 +213,8 @@ export async function getScheduleById(
           trading_partner,
           supplier_name: data.supplier_name,
           supplier_code: data.supplier_code,
-          supplier_email: data.supplier_email
+          supplier_email: data.supplier_email,
+          sent_docs: data.sent_docs ?? []
         },
         lines,
         message,

@@ -5,21 +5,68 @@ import { createScheduleNotification } from "@/services/notifications.service";
 import {
   createSubmission,
   finalizeSubmission,
-  markScheduleInvoiceSent,
+  markScheduleOutboundSent,
   writeSubmissionAudit
 } from "@/services/submissions/submission-repo";
+
+function uniqueRefs(values: Array<string | undefined>): string[] {
+  const seen = new Set<string>();
+  const refs: string[] = [];
+  for (const value of values) {
+    const trimmed = value?.trim();
+    if (!trimmed || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    refs.push(trimmed);
+  }
+  return refs;
+}
 
 function getReference(message: SubmitMessage) {
   switch (message.messageType) {
     case "DESADV":
-      return { refNo: message.payload.asnRef, deljitRef: undefined };
+      return {
+        refNo: message.payload.asnRef,
+        deljitRefs: uniqueRefs(message.payload.lines.map((line) => line.poNumber))
+      };
     case "INVOIC":
-      return { refNo: message.payload.invoiceNo, deljitRef: message.payload.poReference };
+      return { refNo: message.payload.invoiceNo, deljitRefs: uniqueRefs([message.payload.poReference]) };
     case "ORDRSP":
-      return { refNo: message.payload.poReference, deljitRef: undefined };
+      return { refNo: message.payload.poReference, deljitRefs: uniqueRefs([message.payload.poReference]) };
     case "APERAK":
-      return { refNo: message.payload.deljitReference, deljitRef: message.payload.deljitReference };
+      return {
+        refNo: message.payload.deljitReference,
+        deljitRefs: uniqueRefs([message.payload.deljitReference])
+      };
   }
+}
+
+function outboundNotice(messageType: SubmitMessage["messageType"], refNo: string, poRef: string) {
+  if (messageType === "ORDRSP") {
+    return {
+      title: "PO Ack sent",
+      body: `PO acknowledgement ${refNo} was sent for PO ${poRef}.`,
+      tone: "success" as const
+    };
+  }
+  if (messageType === "APERAK") {
+    return {
+      title: "Schedule Ack sent",
+      body: `Schedule acknowledgement was sent for PO ${poRef}.`,
+      tone: "success" as const
+    };
+  }
+  if (messageType === "DESADV") {
+    return {
+      title: "ASN sent",
+      body: `ASN ${refNo} was sent for PO ${poRef}.`,
+      tone: "success" as const
+    };
+  }
+  return {
+    title: "Invoice sent",
+    body: `Invoice ${refNo} was sent for PO ${poRef}.`,
+    tone: "success" as const
+  };
 }
 
 function required(value: string | null | undefined): string {
@@ -32,12 +79,13 @@ export async function processSubmission(
   portalUser: PortalAuthUser
 ) {
   const ref = getReference(message);
+  const primaryPo = ref.deljitRefs[0];
   const created = await createSubmission({
     supplierId,
     companyId: portalUser.business_partner_id,
     message,
     refNo: ref.refNo,
-    deljitRef: ref.deljitRef
+    deljitRef: primaryPo
   });
 
   const supplierCode = required(portalUser.mutually_defined_zz);
@@ -84,23 +132,33 @@ export async function processSubmission(
     response: responsePayload
   });
 
-  if (result.success && message.messageType === "INVOIC" && ref.deljitRef) {
-    const updated = await markScheduleInvoiceSent({
-      supplierId,
-      companyId: portalUser.business_partner_id,
-      poReference: ref.deljitRef
-    });
+  if (result.success && ref.deljitRefs.length > 0) {
+    const updatedById = new Map<string, { id: string; supplier_id: string; company_id: string | null }>();
+    for (const poReference of ref.deljitRefs) {
+      const updated = await markScheduleOutboundSent({
+        supplierId,
+        companyId: portalUser.business_partner_id,
+        poReference,
+        docType: message.messageType
+      });
+      for (const schedule of updated) {
+        updatedById.set(schedule.id, schedule);
+      }
+    }
+
+    const notice = outboundNotice(message.messageType, ref.refNo, primaryPo ?? ref.deljitRefs[0]);
+    const updated = [...updatedById.values()];
 
     for (const schedule of updated) {
       await createScheduleNotification({
         supplierId: schedule.supplier_id,
         companyId: schedule.company_id ?? portalUser.business_partner_id,
-        title: "Invoice sent",
-        body: `Invoice ${ref.refNo} was sent for PO ${ref.deljitRef}.`,
+        title: notice.title,
+        body: notice.body,
         docRef: ref.refNo,
-        docType: "INVOIC",
+        docType: message.messageType,
         scheduleId: schedule.id,
-        tone: "success"
+        tone: notice.tone
       });
     }
 
@@ -108,11 +166,11 @@ export async function processSubmission(
       await createScheduleNotification({
         supplierId,
         companyId: portalUser.business_partner_id,
-        title: "Invoice sent",
-        body: `Invoice ${ref.refNo} was sent for PO ${ref.deljitRef}.`,
+        title: notice.title,
+        body: notice.body,
         docRef: ref.refNo,
-        docType: "INVOIC",
-        tone: "success"
+        docType: message.messageType,
+        tone: notice.tone
       });
     }
   }
