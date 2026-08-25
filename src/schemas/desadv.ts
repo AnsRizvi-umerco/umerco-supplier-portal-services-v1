@@ -1,47 +1,94 @@
 import { z } from "zod";
-import {
-  compactYmdDateSchema,
-  envelopeBaseSchema,
-  nonNegativeDecimalStringSchema,
-  positiveIntStringSchema
-} from "@/schemas/common";
+import { envelopeBaseSchema } from "@/schemas/common";
 
-export const desadvLineSchema = z.object({
-  poNumber: z.string().min(1),
-  poLine: z.string().min(1),
-  partNo: z.string().min(1),
-  description: z.string().min(1),
-  qtyShipped: positiveIntStringSchema,
-  uom: z.string().min(1),
-  containerType: z.string().min(1),
-  poDate: compactYmdDateSchema.optional()
+const addressSchema = z.object({
+  code: z.string(),
+  name: z.string(),
+  street: z.string(),
+  city: z.string(),
+  zip: z.string(),
+  country: z.string()
 });
 
-export const desadvPayloadSchema = z.object({
-  supplierName: z.string().min(1),
-  buyerCompanyName: z.string().min(1),
-  asnRef: z.string().min(1),
-  shipDate: compactYmdDateSchema,
-  shipTime: z.string(),
-  transportMode: z.string().min(1),
-  carrier: z.string().min(1),
-  trackingNo: z.string().min(1),
-  bolNumber: z.string().min(1),
-  shipToFacility: z.string().min(1),
-  shipFromId: z.string().optional(),
-  shipToId: z.string().optional(),
-  usageIndicator: z.enum(["P", "T"]).optional(),
-  packageCount: positiveIntStringSchema,
-  packageType: z.string().min(1),
-  grossWeight: nonNegativeDecimalStringSchema,
-  netWeight: nonNegativeDecimalStringSchema,
-  weightUom: z.string().optional(),
-  length: nonNegativeDecimalStringSchema.optional(),
-  width: nonNegativeDecimalStringSchema.optional(),
-  height: nonNegativeDecimalStringSchema.optional(),
-  dimensionUom: z.string().optional(),
-  notes: z.string(),
-  lines: z.array(desadvLineSchema).min(1)
+const partySchema = z.object({
+  code: z.string(),
+  name: z.string()
+});
+
+const buyerSchema = z.object({
+  id: z.string(),
+  name: z.string()
+});
+
+export const asnTurnaroundSchema = z.object({
+  partNo: z.string().min(1),
+  description: z.string().min(1),
+  shipTo: addressSchema,
+  shipFrom: partySchema,
+  buyer: buyerSchema,
+  poNumber: z.string().min(1),
+  itemNumber: z.string().min(1),
+  releaseNumber: z.string().min(1),
+  price: z.string(),
+  uom: z.string().min(1)
+});
+
+export const sealedTurnaroundSchema = z.object({
+  data: asnTurnaroundSchema,
+  checksum: z.string().min(1)
+});
+
+export const asnReleaseSchema = z.object({
+  id: z.string().min(1),
+  scheduleId: z.string().min(1),
+  turnaround: sealedTurnaroundSchema,
+  deliveryDate: z.string(),
+  openQty: z.number(),
+  qtyToShip: z.number().nonnegative(),
+  partsPerCarton: z.number().int().positive(),
+  cartonsPerPallet: z.number().int().positive(),
+  unitWeightKg: z.number().nonnegative(),
+  countryOfOrigin: z.string(),
+  dateControlled: z.boolean(),
+  manufacturingDate: z.string(),
+  expirationDate: z.string()
+});
+
+export const asnCartonSchema = z.object({
+  id: z.string().min(1),
+  releaseId: z.string().min(1),
+  qty: z.number().int().positive(),
+  short: z.boolean(),
+  licencePlate: z.string().nullable(),
+  grossWeightKg: z.number().nonnegative()
+});
+
+export const asnUnitLoadSchema = z.object({
+  id: z.string().min(1),
+  mode: z.enum(["PALLET", "LOOSE"]),
+  licencePlate: z.string().nullable(),
+  cartons: z.array(asnCartonSchema)
+});
+
+export const asnShipmentSchema = z.object({
+  asnNumber: z.string().min(1),
+  shipDate: z.string().min(1),
+  shipTime: z.string().min(1),
+  transportMode: z.string(),
+  carrierScac: z.string(),
+  trackingNo: z.string(),
+  bolNumber: z.string(),
+  currentStep: z.number().int().min(1).max(5),
+  labelsFrozen: z.boolean(),
+  shipFrom: partySchema,
+  shipTo: addressSchema,
+  buyer: buyerSchema,
+  releases: z.array(asnReleaseSchema),
+  unitLoads: z.array(asnUnitLoadSchema)
+});
+
+export const desadvPayloadSchema = asnShipmentSchema.extend({
+  usageIndicator: z.enum(["P", "T"]).optional()
 });
 
 export const desadvMessageSchema = envelopeBaseSchema.extend({
@@ -50,3 +97,4 @@ export const desadvMessageSchema = envelopeBaseSchema.extend({
 });
 
 export type DesadvMessage = z.infer<typeof desadvMessageSchema>;
+export type AsnShipmentPayload = z.infer<typeof asnShipmentSchema>;

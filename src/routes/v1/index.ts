@@ -7,6 +7,7 @@ import * as settingsController from "@/controllers/v1/settings.controller";
 import * as integrationsController from "@/controllers/v1/integrations.controller";
 import * as notificationsController from "@/controllers/v1/notifications.controller";
 import * as messageHubController from "@/controllers/v1/message-hub.controller";
+import * as asnDraftsController from "@/controllers/v1/asn-drafts.controller";
 
 const router = Router();
 
@@ -16,6 +17,13 @@ router.get("/schedules/:id", requireSupplier, schedulesController.getScheduleByI
 router.get("/notifications", requireSupplier, notificationsController.listNotifications);
 router.patch("/notifications/read-all", requireSupplier, notificationsController.markAllRead);
 router.patch("/notifications/:id/read", requireSupplier, notificationsController.markOneRead);
+
+router.post("/asn/drafts", requireSupplier, asnDraftsController.createDraft);
+router.get("/asn/drafts/:id", requireSupplier, asnDraftsController.getDraft);
+router.patch("/asn/drafts/:id", requireSupplier, asnDraftsController.patchDraft);
+router.post("/asn/drafts/:id/labels/allocate", requireSupplier, asnDraftsController.allocateLabels);
+router.post("/asn/drafts/:id/labels/unlock", requireSupplier, asnDraftsController.unlockLabels);
+router.post("/asn/drafts/:id/submit", requireSupplier, asnDraftsController.submitDraft);
 
 router.post("/submit", requireSupplier, submissionsController.submitDocument);
 router.get("/submissions", requireSupplier, submissionsController.listSubmissions);

@@ -25,8 +25,12 @@ function getReference(message: SubmitMessage) {
   switch (message.messageType) {
     case "DESADV":
       return {
-        refNo: message.payload.asnRef,
-        deljitRefs: uniqueRefs(message.payload.lines.map((line) => line.poNumber))
+        refNo: message.payload.asnNumber,
+        deljitRefs: uniqueRefs(
+          message.payload.releases
+            .filter((release) => release.qtyToShip > 0)
+            .flatMap((release) => [release.turnaround.data.poNumber, release.turnaround.data.releaseNumber])
+        )
       };
     case "INVOIC":
       return { refNo: message.payload.invoiceNo, deljitRefs: uniqueRefs([message.payload.poReference]) };

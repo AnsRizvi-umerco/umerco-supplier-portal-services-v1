@@ -2,6 +2,8 @@ import { z } from "zod";
 import type { PortalAuthUser, SupplierRow } from "@/middleware/auth";
 import { getOperationsPool } from "@/config/operations-db";
 import { resolveDataScope, scopePredicate } from "@/utils/data-scope";
+import { labelsFromShipment } from "@/services/asn/labels-zpl";
+import { shipmentTotals, type AsnShipment } from "@/services/asn/domain";
 
 const reqSchema = z.object({
   submissionId: z.string().uuid()
@@ -21,6 +23,7 @@ export type ShippingLabel = {
   shipDate: string;
   remarks: string;
   barcode: string;
+  barcodeReadable: string;
   zpl: string;
   createdAt: string;
 };
@@ -105,11 +108,64 @@ ${shipFrom}
 ^FO440,250^A0N,22,22^FDREMARKS:^FS
 ^FO440,290^A0N,20,20^FD${zplText(label.remarks)}^FS
 ^FO20,430^GB772,150,3^FS
-^FO80,450^BY2,3,70^BCN,70,Y,N,N^FD${zplText(label.barcode)}^FS
+^FO80,450^BY2,3,70^BCN,70,N,N,N^FD${zplText(label.barcode)}^FS
+^FO80,530^A0N,22,22^FD${zplText(label.barcodeReadable || label.barcode)}^FS
 ^XZ`;
 }
 
-function mapShippingLabel(row: {
+function asShipment(payload: Record<string, unknown>): AsnShipment | null {
+  if (!text(payload.asnNumber) || !Array.isArray(payload.releases) || !Array.isArray(payload.unitLoads)) {
+    return null;
+  }
+  return payload as unknown as AsnShipment;
+}
+
+function mapNestedLabels(
+  row: {
+    id: string;
+    ref_no: string | null;
+    deljit_ref: string | null;
+    submitted_at: string | null;
+    created_at: string;
+  },
+  shipment: AsnShipment
+): ShippingLabel[] {
+  const artifacts = labelsFromShipment(shipment);
+  const totals = shipmentTotals(shipment);
+  const shipToLines = uniqueLines([
+    shipment.shipTo.name,
+    shipment.shipTo.code,
+    shipment.shipTo.street,
+    [shipment.shipTo.city, shipment.shipTo.zip].filter(Boolean).join(" "),
+    shipment.shipTo.country
+  ]);
+  const shipFromLines = uniqueLines([shipment.shipFrom.name, shipment.shipFrom.code]);
+  const poNumber = shipment.releases[0]?.turnaround.data.poNumber || text(row.deljit_ref) || "—";
+
+  return artifacts.map((artifact) => {
+    const mixed = artifact.kind === "5J";
+    const mapped = {
+      id: `${row.id}:${artifact.id}`,
+      asnRef: shipment.asnNumber,
+      poNumber: mixed ? "—" : poNumber,
+      trackingNo: shipment.trackingNo,
+      shipToName: shipment.shipTo.name || shipment.shipTo.code,
+      shipToLines: shipToLines.length > 0 ? shipToLines : [shipment.shipTo.code || "Ship-to"],
+      shipFromName: shipment.shipFrom.name || shipment.shipFrom.code,
+      shipFromLines: shipFromLines.length > 0 ? shipFromLines : [shipment.shipFrom.name || "Supplier"],
+      weight: mixed ? "—" : `${totals.grossWeightKg} KG`,
+      dimensions: "—",
+      shipDate: formatShipDate(shipment.shipDate),
+      remarks: artifact.title,
+      barcode: artifact.licencePlate,
+      barcodeReadable: artifact.readable,
+      createdAt: row.submitted_at || row.created_at
+    };
+    return { ...mapped, zpl: artifact.zpl };
+  });
+}
+
+function mapLegacyLabel(row: {
   id: string;
   ref_no: string | null;
   deljit_ref: string | null;
@@ -120,16 +176,12 @@ function mapShippingLabel(row: {
   const payload = payloadFromCanonical(row.canonical_json);
   const lines = Array.isArray(payload.lines) ? payload.lines : [];
   const firstLine = asRecord(lines[0]) ?? {};
-  const asnRef = text(payload.asnRef) || text(row.ref_no) || "ASN";
+  const asnRef = text(payload.asnNumber) || text(payload.asnRef) || text(row.ref_no) || "ASN";
   const trackingRaw = text(payload.trackingNo);
-  const trackingNo =
-    trackingRaw && trackingRaw !== "NO-TRACKING-YET" ? trackingRaw : asnRef;
+  const trackingNo = trackingRaw && trackingRaw !== "NO-TRACKING-YET" ? trackingRaw : asnRef;
   const shipToName = text(payload.shipToFacility) || text(payload.buyerCompanyName) || "Ship-to";
   const shipFromName = text(payload.supplierName) || "Supplier";
-  const shipToLines = uniqueLines([
-    text(payload.buyerCompanyName),
-    text(payload.shipToFacility)
-  ]);
+  const shipToLines = uniqueLines([text(payload.buyerCompanyName), text(payload.shipToFacility)]);
   const shipFromLines = uniqueLines([shipFromName]);
   const mapped = {
     id: row.id,
@@ -140,20 +192,38 @@ function mapShippingLabel(row: {
     shipToLines: shipToLines.length > 0 ? shipToLines : [shipToName],
     shipFromName,
     shipFromLines: shipFromLines.length > 0 ? shipFromLines : [shipFromName],
-    weight: formatWeight(text(payload.grossWeight), text(payload.weightUom) || "LB"),
+    weight: formatWeight(text(payload.grossWeight), text(payload.weightUom) || "KG"),
     dimensions: formatDimensions(
       text(payload.length),
       text(payload.width),
       text(payload.height),
-      text(payload.dimensionUom) || "IN"
+      text(payload.dimensionUom) || "CM"
     ),
     shipDate: formatShipDate(text(payload.shipDate)),
     remarks: text(payload.notes) || "NO REMARKS",
     barcode: trackingNo.replace(/[^A-Za-z0-9-]/g, "").toUpperCase() || asnRef.toUpperCase(),
+    barcodeReadable: trackingNo.replace(/[^A-Za-z0-9-]/g, "").toUpperCase() || asnRef.toUpperCase(),
     createdAt: row.submitted_at || row.created_at
   };
 
   return { ...mapped, zpl: toZpl(mapped) };
+}
+
+function mapShippingLabels(row: {
+  id: string;
+  ref_no: string | null;
+  deljit_ref: string | null;
+  canonical_json: unknown;
+  submitted_at: string | null;
+  created_at: string;
+}): ShippingLabel[] {
+  const payload = payloadFromCanonical(row.canonical_json);
+  const shipment = asShipment(payload);
+  if (shipment) {
+    const nested = mapNestedLabels(row, shipment);
+    if (nested.length > 0) return nested;
+  }
+  return [mapLegacyLabel(row)];
 }
 
 export async function listShippingLabels(
@@ -181,7 +251,7 @@ export async function listShippingLabels(
       [scope.companyId, scope.supplierId]
     );
 
-    return { status: 200 as const, body: { labels: rows.map(mapShippingLabel) } };
+    return { status: 200 as const, body: { labels: rows.flatMap(mapShippingLabels) } };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to load shipping labels";
     return { status: 400 as const, body: { labels: [], error: message } };
@@ -214,6 +284,6 @@ export async function generateLabels(body: unknown) {
     return { status: 200 as const, body: { labels: [] } };
   }
 
-  const label = mapShippingLabel(row);
-  return { status: 200 as const, body: { labels: [label.zpl], label } };
+  const labels = mapShippingLabels(row);
+  return { status: 200 as const, body: { labels: labels.map((label) => label.zpl), label: labels[0] } };
 }
